@@ -1,0 +1,276 @@
+{% extends "base.html" %}
+{% block title %}{{ run.dataset_name }} · Results{% endblock %}
+
+{% block content %}
+<div class="container">
+
+    <!-- Breadcrumb -->
+    <nav aria-label="breadcrumb" class="mb-3">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="{{ url_for('main.index') }}" class="text-decoration-none"><i class="bi bi-arrow-left me-1"></i> Dashboard</a></li>
+            <li class="breadcrumb-item active">{{ run.dataset_name }}</li>
+        </ol>
+    </nav>
+
+    <!-- ── Winner banner with Dataset Visual Graphic ── -->
+    {% set best = run.models[0] %}
+    <div class="rounded-4 p-4 mb-4 text-white banner-dark shadow">
+        <div class="row align-items-center g-4">
+            <div class="col-lg-3 col-md-4 text-center">
+                <img src="{{ url_for('static', filename='img/' + run.dataset_id + '.svg') }}" 
+                     alt="{{ run.dataset_name }}" 
+                     class="img-fluid banner-img-thumb">
+            </div>
+            <div class="col-lg-5 col-md-8">
+                <div class="d-flex flex-wrap gap-2 mb-2">
+                    <span class="badge bg-warning text-dark fw-bold"><i class="bi bi-trophy-fill me-1"></i>Best Model</span>
+                    <span class="badge bg-secondary">{{ run.dataset_name }}</span>
+                    <span class="badge bg-success-subtle text-success border border-success-subtle">
+                        <i class="bi bi-database-fill-check me-1"></i> SQLite Run #{{ run.id }}
+                    </span>
+                </div>
+                <h2 class="fw-bold mb-1">{{ best.model_name }}</h2>
+                <p class="text-light-muted mb-2 small">
+                    Best hyperparameters via GridSearchCV:
+                    {% for k,v in best.best_params.items() %}
+                        <code class="text-warning-emphasis">{{ k }}={{ v }}</code>{% if not loop.last %}, {% endif %}
+                    {% endfor %}
+                </p>
+                <div class="font-monospace small text-secondary">
+                    <i class="bi bi-file-earmark-code text-warning me-1"></i>
+                    Split pickle: <span class="text-warning-emphasis">{{ run.split_pickle_path }}</span>
+                </div>
+            </div>
+            <div class="col-lg-4">
+                <div class="d-flex gap-3 justify-content-lg-end text-center">
+                    <div class="stat-pill">
+                        <div class="label-xs text-light-muted">Test Accuracy</div>
+                        <div class="fs-3 fw-bold text-success">{{ (best.test_accuracy*100)|round(2) }}%</div>
+                    </div>
+                    <div class="stat-pill">
+                        <div class="label-xs text-light-muted">ROC-AUC</div>
+                        <div class="fs-3 fw-bold text-info">{{ best.auc_val|round(3) }}</div>
+                    </div>
+                    <div class="stat-pill">
+                        <div class="label-xs text-light-muted">F1-Score</div>
+                        <div class="fs-3 fw-bold text-warning">{{ best.f1_val|round(3) }}</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Preprocessing audit ── -->
+    <div class="card border-0 shadow-sm rounded-4 p-4 mb-4 bg-white">
+        <h5 class="fw-bold mb-3"><i class="bi bi-diagram-3-fill text-primary me-2"></i>Pipeline & ColumnTransformer Audit</h5>
+        <div class="row g-3 text-center">
+            <div class="col-md-3 col-6"><div class="audit-cell">
+                <div class="label-xs">Raw Rows</div><div class="fs-4 fw-bold">{{ run.raw_rows }}</div>
+            </div></div>
+            <div class="col-md-3 col-6"><div class="audit-cell">
+                <div class="label-xs">After Dedup</div>
+                <div class="fs-4 fw-bold {% if run.duplicates_removed %}text-danger{% else %}text-success{% endif %}">
+                    {{ run.final_rows }} <small class="fs-6 text-muted">(-{{ run.duplicates_removed }})</small>
+                </div>
+            </div></div>
+            <div class="col-md-3 col-6"><div class="audit-cell">
+                <div class="label-xs">Imputation</div>
+                <div class="fs-5 fw-bold font-monospace">{{ run.missing_strategy }}</div>
+                <div class="small text-muted">SimpleImputer in Pipeline</div>
+            </div></div>
+            <div class="col-md-3 col-6"><div class="audit-cell">
+                <div class="label-xs">Scaler (auto-selected)</div>
+                <div class="fs-5 fw-bold text-primary font-monospace">{{ run.scaler_used|capitalize }}Scaler</div>
+                <div class="small text-muted">ColumnTransformer</div>
+            </div></div>
+        </div>
+    </div>
+
+    <!-- ── Comprehensive metrics table ── -->
+    <div class="card border-0 shadow-sm rounded-4 p-4 mb-4 bg-white">
+        <h5 class="fw-bold mb-3"><i class="bi bi-table text-primary me-2"></i>Comprehensive Model Benchmark (KNN vs SVM vs Decision Tree)</h5>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-dark small text-uppercase">
+                    <tr>
+                        <th>Model</th>
+                        <th>Best Params</th>
+                        <th>Test Acc.</th>
+                        <th>Train Acc.</th>
+                        <th>5-Fold CV</th>
+                        <th>Overfitting</th>
+                        <th>Precision</th>
+                        <th>Recall</th>
+                        <th>F1</th>
+                        <th>AUC</th>
+                    </tr>
+                </thead>
+                <tbody class="small">
+                    {% for m in run.models %}
+                    <tr {% if loop.first %}class="table-success-subtle fw-semibold"{% endif %}>
+                        <td>
+                            <div class="d-flex align-items-center gap-2">
+                                <span class="dot dot-{{ m.model_key }}"></span>
+                                <strong>{{ m.model_name }}</strong>
+                                {% if loop.first %}<span class="badge bg-warning text-dark"><i class="bi bi-star-fill"></i> Best</span>{% endif %}
+                            </div>
+                        </td>
+                        <td class="font-monospace text-muted" style="font-size:0.75rem">
+                            {% for k,v in m.best_params.items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}
+                        </td>
+                        <td><span class="fs-6 fw-bold {% if loop.first %}text-success{% endif %}">{{ (m.test_accuracy*100)|round(2) }}%</span></td>
+                        <td>{{ (m.train_accuracy*100)|round(1) }}%</td>
+                        <td><span class="font-monospace">{{ (m.cv_mean*100)|round(1) }}%</span> <span class="text-muted small">±{{ (m.cv_std*100)|round(1) }}%</span></td>
+                        <td>
+                            <span class="badge bg-{{ m.overfitting_badge }}-subtle text-{{ m.overfitting_badge }} border border-{{ m.overfitting_badge }}-subtle small"
+                                  title="{{ m.overfitting_desc }}">{{ m.overfitting_status }}</span>
+                        </td>
+                        <td>{{ (m.precision_val*100)|round(1) }}%</td>
+                        <td>{{ (m.recall_val*100)|round(1) }}%</td>
+                        <td><strong>{{ m.f1_val|round(3) }}</strong></td>
+                        <td><span class="badge bg-info-subtle text-info-emphasis font-monospace">{{ m.auc_val|round(3) }}</span></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- ── Plots (tabs) ── -->
+    <div class="card border-0 shadow-sm rounded-4 p-4 mb-4 bg-white">
+        <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+            <h5 class="fw-bold mb-0"><i class="bi bi-bar-chart-fill text-primary me-2"></i>Visualizations</h5>
+            <ul class="nav nav-pills" id="plotTabs" role="tablist">
+                <li class="nav-item"><button class="nav-link active small rounded-pill px-3" data-bs-toggle="pill" data-bs-target="#tab-cm"><i class="bi bi-grid-3x3 me-1"></i>Confusion Matrices</button></li>
+                <li class="nav-item"><button class="nav-link small rounded-pill px-3" data-bs-toggle="pill" data-bs-target="#tab-roc"><i class="bi bi-graph-up me-1"></i>ROC / AUC</button></li>
+                <li class="nav-item"><button class="nav-link small rounded-pill px-3" data-bs-toggle="pill" data-bs-target="#tab-overfit"><i class="bi bi-shield-check me-1"></i>Overfit / CV</button></li>
+                <li class="nav-item"><button class="nav-link small rounded-pill px-3" data-bs-toggle="pill" data-bs-target="#tab-bench"><i class="bi bi-bar-chart-line me-1"></i>Benchmark</button></li>
+            </ul>
+        </div>
+
+        <div class="tab-content pt-2">
+
+            <!-- Confusion Matrices — 3 clean cards, side by side, NO scrolling -->
+            <div class="tab-pane fade show active" id="tab-cm">
+                <div class="row g-4 justify-content-center">
+                    {% for m in run.models %}
+                    {% set cm_key = 'cm_' ~ m.model_key %}
+                    <div class="col-lg-4 col-md-6">
+                        <div class="card border rounded-3 shadow-xs h-100 text-center">
+                            <div class="card-header bg-light d-flex justify-content-between align-items-center py-2 px-3">
+                                <span class="fw-bold small">{{ m.model_name }}</span>
+                                <span class="badge bg-secondary-subtle text-secondary small">{{ (m.test_accuracy*100)|round(1) }}%</span>
+                            </div>
+                            <div class="card-body p-2 d-flex justify-content-center">
+                                {% if cm_key in run.plots %}
+                                <img src="{{ run.plots[cm_key] }}" alt="CM {{ m.model_name }}" class="img-fluid rounded" style="max-height:270px">
+                                {% else %}
+                                <div class="text-muted small py-5">Plot not available</div>
+                                {% endif %}
+                            </div>
+                            <div class="card-footer bg-white border-0 pb-3">
+                                <div class="row g-1 text-center small font-monospace">
+                                    <div class="col-6"><div class="bg-light p-1 rounded border">TN <strong class="text-primary">{{ m.tn }}</strong></div></div>
+                                    <div class="col-6"><div class="bg-light p-1 rounded border">FP <strong class="text-danger">{{ m.fp }}</strong></div></div>
+                                    <div class="col-6 mt-1"><div class="bg-light p-1 rounded border">FN <strong class="text-warning-emphasis">{{ m.fn }}</strong></div></div>
+                                    <div class="col-6 mt-1"><div class="bg-light p-1 rounded border">TP <strong class="text-success">{{ m.tp }}</strong></div></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <!-- ROC Curve -->
+            <div class="tab-pane fade" id="tab-roc">
+                <div class="row g-4 align-items-center">
+                    <div class="col-lg-8 text-center">
+                        <div class="border rounded-4 p-2 bg-white">
+                            {% if 'roc' in run.plots %}
+                            <img src="{{ run.plots.roc }}" alt="ROC" class="img-fluid rounded-3" style="max-height:460px">
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="col-lg-4">
+                        <div class="bg-light rounded-4 p-4 h-100">
+                            <h6 class="fw-bold mb-3"><i class="bi bi-info-circle-fill text-primary me-2"></i>ROC & AUC</h6>
+                            <p class="small text-secondary mb-3">The ROC curve plots True Positive Rate vs False Positive Rate across thresholds. AUC = 1 is perfect; AUC = 0.5 is random.</p>
+                            <div class="list-group list-group-flush border rounded-3 small">
+                                {% for m in run.models %}
+                                <div class="list-group-item d-flex justify-content-between bg-white">
+                                    <span class="d-flex align-items-center gap-2"><span class="dot dot-{{ m.model_key }}"></span>{{ m.model_name }}</span>
+                                    <span class="badge bg-primary font-monospace">AUC {{ m.auc_val|round(3) }}</span>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Overfitting / CV -->
+            <div class="tab-pane fade" id="tab-overfit">
+                <div class="row g-4 align-items-center">
+                    <div class="col-lg-8 text-center">
+                        <div class="border rounded-4 p-2 bg-white">
+                            {% if 'overfit' in run.plots %}
+                            <img src="{{ run.plots.overfit }}" alt="Overfit" class="img-fluid rounded-3" style="max-height:460px">
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="col-lg-4">
+                        <div class="bg-light rounded-4 p-4 h-100">
+                            <h6 class="fw-bold mb-3"><i class="bi bi-shield-shaded text-success me-2"></i>Overfitting Diagnosis</h6>
+                            {% for m in run.models %}
+                            <div class="card border mb-2 p-2 bg-white rounded-3 small">
+                                <div class="d-flex justify-content-between mb-1">
+                                    <strong>{{ m.model_name }}</strong>
+                                    <span class="badge bg-{{ m.overfitting_badge }}">{{ m.overfitting_status }}</span>
+                                </div>
+                                <div class="text-secondary">{{ m.overfitting_desc }}</div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Benchmark -->
+            <div class="tab-pane fade" id="tab-bench">
+                <div class="text-center">
+                    {% if 'benchmark' in run.plots %}
+                    <img src="{{ run.plots.benchmark }}" alt="Benchmark" class="img-fluid rounded-3" style="max-height:460px">
+                    {% endif %}
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- Run history switcher -->
+    {% if all_runs|length > 1 %}
+    <div class="card border-0 shadow-sm rounded-4 p-4 bg-white mb-4">
+        <h5 class="fw-bold mb-3"><i class="bi bi-clock-history text-primary me-2"></i>Other Saved Runs for This Dataset</h5>
+        <div class="d-flex flex-wrap gap-2">
+            {% for r in all_runs %}
+            <a href="{{ url_for('main.run_detail', run_id=r.id) }}"
+               class="btn btn-sm {% if r.id == run.id %}btn-primary{% else %}btn-outline-secondary{% endif %} rounded-pill font-monospace">
+                #{{ r.id }} &mdash; {{ r.timestamp[:16] }}
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="d-flex justify-content-between mt-2 mb-5">
+        <a href="{{ url_for('main.history') }}" class="btn btn-outline-secondary rounded-pill px-4">
+            <i class="bi bi-clock-history me-1"></i> Full Run History
+        </a>
+        <a href="{{ url_for('main.index') }}" class="btn btn-primary rounded-pill px-4 shadow-sm">
+            <i class="bi bi-grid-fill me-1"></i> Dashboard
+        </a>
+    </div>
+
+</div>
+{% endblock %}
