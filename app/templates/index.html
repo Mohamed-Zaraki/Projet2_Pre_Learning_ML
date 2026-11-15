@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Dashboard · ML Workbench{% endblock %}
+{% block title %}Dashboard · Phase II ML Workbench{% endblock %}
 
 {% block content %}
 <div class="container">
@@ -8,18 +8,24 @@
     <div class="bg-white rounded-4 shadow-sm border p-4 mb-4">
         <div class="row align-items-center g-3">
             <div class="col-lg-8">
+                <div class="d-flex align-items-center gap-2 mb-2">
+                    <span class="badge bg-primary-subtle text-primary border border-primary-subtle fw-bold">Phase II</span>
+                    <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle fw-bold">Manual Parameter Tuning</span>
+                    <span class="badge bg-danger-subtle text-danger border border-danger-subtle fw-bold">Noise & Outliers Study</span>
+                </div>
                 <h1 class="fw-bold mb-2">ML Preprocessing & Modeling Dashboard</h1>
                 <p class="text-secondary mb-0">
                     Results are pre-computed offline (<code>train_and_save.py</code>) using
                     <strong>scikit-learn Pipeline</strong>, <strong>ColumnTransformer</strong>, and
-                    <strong>GridSearchCV</strong>. This interface is <em>read-only</em> — it
-                    reads from the SQLite database and displays results.
+                    <strong>manual hyperparameter evaluation</strong>. Evaluates the
+                    <strong>influence of Noise & Outliers</strong> and the <strong>influence of Model Parameters</strong>
+                    (KNN $k$, Ensemble estimators, SVM kernel). This interface is <em>read-only</em>.
                 </p>
             </div>
             <div class="col-lg-4 text-lg-end">
                 <div class="d-inline-block border rounded-3 p-3 bg-light text-center">
                     <div class="small text-muted fw-semibold text-uppercase mb-1">Architecture</div>
-                    <span class="badge bg-dark px-3 py-2 fs-6">MVC Pattern</span>
+                    <span class="badge bg-dark px-3 py-2 fs-6">MVC Pattern · Phase II</span>
                 </div>
             </div>
         </div>
@@ -28,7 +34,8 @@
     <!-- Pipeline badges row -->
     <div class="d-flex flex-wrap gap-2 mb-4">
         <span class="badge bg-primary-subtle text-primary border border-primary-subtle px-3 py-2">Pipeline + ColumnTransformer</span>
-        <span class="badge bg-success-subtle text-success border border-success-subtle px-3 py-2">GridSearchCV (KNN / SVM / Decision Tree)</span>
+        <span class="badge bg-success-subtle text-success border border-success-subtle px-3 py-2">Manual Tuning (KNN / Ensemble / SVM)</span>
+        <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-3 py-2">Noise & Outlier Robustness</span>
         <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle px-3 py-2">5-Fold Stratified CV</span>
         <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle px-3 py-2">Confusion Matrix · ROC-AUC</span>
         <span class="badge bg-secondary-subtle text-secondary border px-3 py-2">SQLite + Pickle</span>
@@ -83,7 +90,7 @@
                     {% if best %}
                     <div class="d-flex align-items-center justify-content-between mb-3">
                         <div>
-                            <div class="label-xs mb-1">Best Model (GridSearchCV)</div>
+                            <div class="label-xs mb-1">Top Performing Model</div>
                             <span class="fw-bold text-dark">{{ best.model_name }}</span>
                         </div>
                         <div class="text-end">
@@ -124,7 +131,7 @@
                     {% if run %}
                     <a href="{{ url_for('main.dataset_view', dataset_id=ds.id) }}"
                        class="btn btn-primary w-100 rounded-pill fw-semibold shadow-sm">
-                        <i class="bi bi-bar-chart-line-fill me-1"></i> View Full Results & Plots
+                        <i class="bi bi-bar-chart-line-fill me-1"></i> View Phase II Results & Visualizations
                     </a>
                     {% else %}
                     <button class="btn btn-outline-secondary w-100 rounded-pill" disabled>Not trained yet</button>

@@ -1,24 +1,25 @@
 """
-train_and_save.py
-=================
-Offline training script — run this ONCE before starting the Flask app.
+train_and_save.py — Offline Phase II Training & Evaluation Script.
+
+Run this script ONCE before running the Flask application.
 
 What it does for each dataset:
-  1. Load & deduplicate via dataset_loader
-  2. Auto-select the best scaler (StandardScaler / MinMaxScaler / RobustScaler)
-  3. Build sklearn Pipeline: ColumnTransformer(Imputer → Scaler) → Classifier
-  4. Run GridSearchCV for KNN, SVM, and Decision Tree
-  5. Evaluate: Accuracy, Precision, Recall, F1, ROC-AUC, Confusion Matrix,
-               5-Fold Cross-Validation, Overfitting diagnosis
-  6. Generate and store all plots as base64 PNGs
-  7. Persist everything to SQLite (instance/ml_workbench.db)
-     and serialise train/test splits to storage/splits/*.pkl
-     and fitted pipelines to storage/models/*.pkl
-
-Usage
------
-  python train_and_save.py           # trains all 4 datasets
-  python train_and_save.py alcohol   # trains a single dataset
+  1. Load, deduplicate, and split (dataset_loader)
+  2. Auto-select best scaler (StandardScaler / MinMaxScaler / RobustScaler)
+  3. Manual Hyperparameter Optimization for:
+       - KNN: evaluates k = ? (1, 3, 5, 7, 11, 15, 21)
+       - Ensemble: Random Forest evaluating n_estimators = ? (10, 25, 50, 100, 150, 200)
+       - SVM: evaluating kernel = ... (rbf, linear, poly)
+  4. Phase II: Evaluate Influence of Noise and Outliers:
+       - Baseline (Standard data)
+       - Without Outliers (IQR filtered)
+       - With Feature Noise (Gaussian perturbation)
+       - With Injected Outliers (Synthetic anomaly spikes)
+  5. Generate standalone base64 PNG visualizations:
+       - Noise & Outlier Impact Comparison
+       - Parameter Sensitivity Curves (k, estimators, kernel)
+       - ROC Curves, Confusion Matrices, Overfitting Analysis
+  6. Persist to SQLite (instance/ml_workbench.db) & Pickle files (storage/)
 """
 
 import os, sys, tempfile, warnings
@@ -37,7 +38,7 @@ from app.models.ml_manager    import train_all
 from app.models.visualizer    import generate_all
 from app.models.db_manager    import init_db, save_run
 
-SEP = '=' * 62
+SEP = '=' * 66
 
 
 def run_dataset(dataset_key):
@@ -55,28 +56,43 @@ def run_dataset(dataset_key):
     if meta['total_nulls']:
         print(f'  NaN cols : {meta["null_per_col"]}')
 
-    # 2. GridSearchCV → train
-    print('  GridSearchCV running (KNN / SVM / Decision Tree) ...')
-    results, models_dict, best_key, scaler_used = train_all(
+    # 2. Manual Parameter Tuning & Model Fitting
+    print('  [Phase II] Evaluating Manual Hyperparameters (KNN, Ensemble, SVM) ...')
+    results, models_dict, best_key, scaler_used, sensitivity_dict, noise_outlier_data = train_all(
         X_train, X_test, y_train, y_test, meta['feature_names'],
         imputer_strategy='median', cv_folds=5)
 
-    # 3. Print results summary
-    print(f'  Scaler selected : {scaler_used}')
+    # 3. Print Model Benchmark
+    print(f'  Scaler selected : {scaler_used.capitalize()}Scaler')
     for key, res in results.items():
         star = ' <-- BEST' if key == best_key else ''
-        print(f'  [{key:<13s}]  '
+        print(f'  [{key:<10s}]  '
               f'Test={res["test_accuracy"]*100:.2f}%  '
               f'CV={res["cv_mean"]*100:.1f}% +/- {res["cv_std"]*100:.1f}%  '
               f'AUC={res["auc"]:.3f}  '
               f'{res["overfitting_status"]}{star}')
-        print(f'               Best params: {res["best_params"]}')
+        print(f'               Chosen params: {res["best_params"]}')
 
-    # 4. Plots
-    print('  Generating plots ...')
-    plots = generate_all(results)
+    # 4. Print Phase II: Noise & Outlier Results
+    print('\n  [Phase II: Influence of Noise & Outliers]')
+    print(f'  IQR Outliers Filtered : {noise_outlier_data["stats"]["outliers_removed"]} samples')
+    print(f'  Outliers Injected     : {noise_outlier_data["stats"]["outliers_injected"]} samples')
+    print('  ' + '-' * 76)
+    print(f'  {"Model":<12} | {"Baseline":<9} | {"No Outliers":<11} | {"With Noise":<10} | {"Smoothed":<8} | {"With Outliers":<12}')
+    print('  ' + '-' * 76)
+    for row in noise_outlier_data['comparison']:
+        print(f'  {row["model_key"]:<12} | {row["baseline_acc"]*100:6.1f}%   | '
+              f'{row["without_outliers_acc"]*100:8.1f}%   | '
+              f'{row["noisy_acc"]*100:7.1f}%   | '
+              f'{row["smoothed_acc"]*100:5.1f}%   | '
+              f'{row["outliers_acc"]*100:9.1f}%')
+    print('  ' + '-' * 76)
 
-    # 5. Persist to SQLite + pickle
+    # 5. Generate Visualizations
+    print('  Generating Phase II plots ...')
+    plots = generate_all(results, sensitivity_dict, noise_outlier_data)
+
+    # 6. Persist to SQLite + pickle
     run_id, split_path = save_run(
         dataset_id        = dataset_key,
         dataset_name      = meta['dataset_name'],
@@ -95,6 +111,8 @@ def run_dataset(dataset_key):
         best_model_key    = best_key,
         models_dict       = models_dict,
         plots_dict        = plots,
+        sensitivity_dict  = sensitivity_dict,
+        noise_outlier_data= noise_outlier_data
     )
     print(f'  Saved    : SQLite run #{run_id}')
     print(f'  Pickle   : {split_path}')
@@ -111,5 +129,5 @@ if __name__ == '__main__':
         run_dataset(key)
 
     print(f'\n{SEP}')
-    print('  ALL DONE -- launch the Flask app: python run.py')
+    print('  PHASE II COMPLETE -- Launch the Flask app: python run.py')
     print(SEP)

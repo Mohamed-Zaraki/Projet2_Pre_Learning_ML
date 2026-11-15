@@ -1,9 +1,10 @@
 """
-db_manager.py — SQLite persistence layer.
+db_manager.py — SQLite persistence layer for Phase II.
 
 Responsible for:
   - Initialising the schema (init_db)
-  - Writing a completed experiment run (save_run)
+  - Writing completed offline experiment runs (save_run), including
+    Phase II noise/outlier evaluations and parameter sensitivity
   - Reading experiments for the Flask read-only frontend
 """
 
@@ -33,79 +34,82 @@ def init_db():
     with _conn() as c:
         c.executescript('''
             CREATE TABLE IF NOT EXISTS training_runs (
-                id               INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp        TEXT    NOT NULL,
-                dataset_id       TEXT    NOT NULL,
-                dataset_name     TEXT    NOT NULL,
-                raw_rows         INTEGER NOT NULL,
-                final_rows       INTEGER NOT NULL,
-                features_count   INTEGER NOT NULL,
-                feature_names    TEXT    NOT NULL,   -- JSON list
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp          TEXT    NOT NULL,
+                dataset_id         TEXT    NOT NULL,
+                dataset_name       TEXT    NOT NULL,
+                raw_rows           INTEGER NOT NULL,
+                final_rows         INTEGER NOT NULL,
+                features_count     INTEGER NOT NULL,
+                feature_names      TEXT    NOT NULL,   -- JSON list
                 duplicates_removed INTEGER NOT NULL,
-                missing_strategy TEXT    NOT NULL,
-                scaler_used      TEXT    NOT NULL,
-                test_size        REAL    NOT NULL,
-                cv_folds         INTEGER NOT NULL,
-                split_pickle_path TEXT   NOT NULL,
-                best_model_key   TEXT    NOT NULL
+                missing_strategy   TEXT    NOT NULL,
+                scaler_used        TEXT    NOT NULL,
+                test_size          REAL    NOT NULL,
+                cv_folds           INTEGER NOT NULL,
+                split_pickle_path  TEXT    NOT NULL,
+                best_model_key     TEXT    NOT NULL,
+                noise_outlier_json TEXT                -- Phase II JSON
             );
 
             CREATE TABLE IF NOT EXISTS model_evaluations (
-                id                INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_id            INTEGER NOT NULL,
-                model_key         TEXT    NOT NULL,
-                model_name        TEXT    NOT NULL,
-                best_params       TEXT    NOT NULL,  -- JSON
-                test_accuracy     REAL    NOT NULL,
-                train_accuracy    REAL    NOT NULL,
-                cv_mean           REAL    NOT NULL,
-                cv_std            REAL    NOT NULL,
-                precision_val     REAL    NOT NULL,
-                recall_val        REAL    NOT NULL,
-                f1_val            REAL    NOT NULL,
-                auc_val           REAL    NOT NULL,
-                overfitting_status TEXT   NOT NULL,
-                overfitting_badge  TEXT   NOT NULL,
-                overfitting_desc   TEXT   NOT NULL,
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id             INTEGER NOT NULL,
+                model_key          TEXT    NOT NULL,
+                model_name         TEXT    NOT NULL,
+                best_params        TEXT    NOT NULL,  -- JSON
+                test_accuracy      REAL    NOT NULL,
+                train_accuracy     REAL    NOT NULL,
+                cv_mean            REAL    NOT NULL,
+                cv_std             REAL    NOT NULL,
+                precision_val      REAL    NOT NULL,
+                recall_val         REAL    NOT NULL,
+                f1_val             REAL    NOT NULL,
+                auc_val            REAL    NOT NULL,
+                overfitting_status TEXT    NOT NULL,
+                overfitting_badge  TEXT    NOT NULL,
+                overfitting_desc   TEXT    NOT NULL,
                 tn INTEGER NOT NULL,
                 fp INTEGER NOT NULL,
                 fn INTEGER NOT NULL,
                 tp INTEGER NOT NULL,
-                model_pickle_path TEXT,
+                model_pickle_path  TEXT,
+                param_curve        TEXT,              -- Phase II sensitivity curve JSON
                 FOREIGN KEY (run_id) REFERENCES training_runs(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS plots (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 run_id     INTEGER NOT NULL,
-                plot_type  TEXT    NOT NULL,   -- 'roc' | 'benchmark' | 'overfit' | 'cm_KNN' | …
+                plot_type  TEXT    NOT NULL,   -- 'roc' | 'benchmark' | 'noise_outlier' | ...
                 plot_b64   TEXT    NOT NULL,   -- base64 PNG data URI
                 FOREIGN KEY (run_id) REFERENCES training_runs(id) ON DELETE CASCADE
             );
         ''')
 
+        # Add columns if migrating an older database
+        try:
+            c.execute('ALTER TABLE training_runs ADD COLUMN noise_outlier_json TEXT')
+        except sqlite3.OperationalError:
+            pass
+        try:
+            c.execute('ALTER TABLE model_evaluations ADD COLUMN param_curve TEXT')
+        except sqlite3.OperationalError:
+            pass
 
-# ── Write path (called only by train_and_save.py) ──────────────────────────
+
+# ── Write path (called only by train_and_save.py offline) ──────────────────
 
 def save_run(dataset_id, dataset_name, raw_rows, final_rows,
              features_count, feature_names, duplicates_removed,
              missing_strategy, scaler_used, test_size, cv_folds,
              X_train, X_test, y_train, y_test,
              results: dict, best_model_key: str,
-             models_dict: dict, plots_dict: dict):
+             models_dict: dict, plots_dict: dict,
+             sensitivity_dict: dict = None,
+             noise_outlier_data: dict = None):
     """
     Persist one complete experiment to SQLite + pickle files.
-
-    Parameters
-    ----------
-    results      : {model_key: {...metrics...}} produced by ml_manager
-    best_model_key : key of the winning model
-    models_dict  : {model_key: fitted sklearn Pipeline}
-    plots_dict   : {plot_type: base64_data_uri}
-
-    Returns
-    -------
-    run_id (int), split_pickle_path (str)
     """
     init_db()
     ts   = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -137,25 +141,27 @@ def save_run(dataset_id, dataset_name, raw_rows, final_rows,
             (timestamp, dataset_id, dataset_name, raw_rows, final_rows,
              features_count, feature_names, duplicates_removed,
              missing_strategy, scaler_used, test_size, cv_folds,
-             split_pickle_path, best_model_key)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             split_pickle_path, best_model_key, noise_outlier_json)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ''', (ts, dataset_id, dataset_name, raw_rows, final_rows,
               features_count, json.dumps(feature_names), duplicates_removed,
               missing_strategy, scaler_used, test_size, cv_folds,
-              split_path, best_model_key))
+              split_path, best_model_key,
+              json.dumps(noise_outlier_data or {})))
         run_id = cur.lastrowid
 
         # Model benchmarks
         for key, res in results.items():
             cm = res['confusion_matrix']
+            curve = sensitivity_dict.get(key, []) if sensitivity_dict else []
             c.execute('''
                 INSERT INTO model_evaluations
                 (run_id, model_key, model_name, best_params,
                  test_accuracy, train_accuracy, cv_mean, cv_std,
                  precision_val, recall_val, f1_val, auc_val,
                  overfitting_status, overfitting_badge, overfitting_desc,
-                 tn, fp, fn, tp, model_pickle_path)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 tn, fp, fn, tp, model_pickle_path, param_curve)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ''', (run_id, key, res['name'],
                   json.dumps(res.get('best_params', {})),
                   res['test_accuracy'], res['train_accuracy'],
@@ -165,7 +171,8 @@ def save_run(dataset_id, dataset_name, raw_rows, final_rows,
                   res['overfitting_status'], res['overfitting_badge'],
                   res['overfitting_desc'],
                   cm['tn'], cm['fp'], cm['fn'], cm['tp'],
-                  model_paths.get(key, '')))
+                  model_paths.get(key, ''),
+                  json.dumps(curve)))
 
         # Plots (base64)
         for ptype, b64 in plots_dict.items():
@@ -185,27 +192,35 @@ def get_all_runs(limit=50):
             'SELECT * FROM training_runs ORDER BY id DESC LIMIT ?', (limit,))]
 
 
+def _parse_run_record(row, c):
+    run = dict(row)
+    run['feature_names'] = json.loads(run['feature_names'])
+    run['noise_outlier_data'] = json.loads(run.get('noise_outlier_json') or '{}')
+
+    run['models'] = [
+        dict(m) | {
+            'best_params': json.loads(m['best_params']),
+            'param_curve': json.loads(m['param_curve'] or '[]')
+        }
+        for m in c.execute(
+            'SELECT * FROM model_evaluations WHERE run_id=? ORDER BY test_accuracy DESC',
+            (run['id'],))
+    ]
+
+    run['plots'] = {
+        r['plot_type']: r['plot_b64']
+        for r in c.execute('SELECT plot_type, plot_b64 FROM plots WHERE run_id=?', (run['id'],))
+    }
+    return run
+
+
 def get_run(run_id):
     init_db()
     with _conn() as c:
         row = c.execute('SELECT * FROM training_runs WHERE id=?', (run_id,)).fetchone()
         if not row:
             return None
-        run = dict(row)
-        run['feature_names'] = json.loads(run['feature_names'])
-
-        run['models'] = [
-            dict(m) | {'best_params': json.loads(m['best_params'])}
-            for m in c.execute(
-                'SELECT * FROM model_evaluations WHERE run_id=? ORDER BY test_accuracy DESC',
-                (run_id,))
-        ]
-
-        run['plots'] = {
-            r['plot_type']: r['plot_b64']
-            for r in c.execute('SELECT plot_type, plot_b64 FROM plots WHERE run_id=?', (run_id,))
-        }
-        return run
+        return _parse_run_record(row, c)
 
 
 def get_latest_run_per_dataset():
@@ -220,20 +235,4 @@ def get_latest_run_per_dataset():
             ) g ON t.id = g.max_id
             ORDER BY t.id DESC
         ''').fetchall()
-        result = []
-        for row in rows:
-            run = dict(row)
-            run['feature_names'] = json.loads(run['feature_names'])
-            # Attach model rows
-            run['models'] = [
-                dict(m) | {'best_params': json.loads(m['best_params'])}
-                for m in c.execute(
-                    'SELECT * FROM model_evaluations WHERE run_id=? ORDER BY test_accuracy DESC',
-                    (run['id'],))
-            ]
-            run['plots'] = {
-                r['plot_type']: r['plot_b64']
-                for r in c.execute('SELECT plot_type, plot_b64 FROM plots WHERE run_id=?', (run['id'],))
-            }
-            result.append(run)
-        return result
+        return [_parse_run_record(row, c) for row in rows]

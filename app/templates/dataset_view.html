@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ run.dataset_name }} · Results{% endblock %}
+{% block title %}{{ run.dataset_name }} · Phase II Results{% endblock %}
 
 {% block content %}
 <div class="container">
@@ -12,7 +12,7 @@
         </ol>
     </nav>
 
-    <!-- ── Winner banner with Dataset Visual Graphic ── -->
+    <!-- ── Winner banner ── -->
     {% set best = run.models[0] %}
     <div class="rounded-4 p-4 mb-4 text-white banner-dark shadow">
         <div class="row align-items-center g-4">
@@ -23,15 +23,16 @@
             </div>
             <div class="col-lg-5 col-md-8">
                 <div class="d-flex flex-wrap gap-2 mb-2">
-                    <span class="badge bg-warning text-dark fw-bold"><i class="bi bi-trophy-fill me-1"></i>Best Model</span>
+                    <span class="badge bg-warning text-dark fw-bold"><i class="bi bi-trophy-fill me-1"></i>Top Model</span>
                     <span class="badge bg-secondary">{{ run.dataset_name }}</span>
                     <span class="badge bg-success-subtle text-success border border-success-subtle">
                         <i class="bi bi-database-fill-check me-1"></i> SQLite Run #{{ run.id }}
                     </span>
+                    <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle">Phase II</span>
                 </div>
                 <h2 class="fw-bold mb-1">{{ best.model_name }}</h2>
                 <p class="text-light-muted mb-2 small">
-                    Best hyperparameters via GridSearchCV:
+                    Selected hyperparameters via manual cross-validation:
                     {% for k,v in best.best_params.items() %}
                         <code class="text-warning-emphasis">{{ k }}={{ v }}</code>{% if not loop.last %}, {% endif %}
                     {% endfor %}
@@ -60,9 +61,9 @@
         </div>
     </div>
 
-    <!-- ── Preprocessing audit ── -->
+    <!-- ── Preprocessing & Phase II Audit ── -->
     <div class="card border-0 shadow-sm rounded-4 p-4 mb-4 bg-white">
-        <h5 class="fw-bold mb-3"><i class="bi bi-diagram-3-fill text-primary me-2"></i>Pipeline & ColumnTransformer Audit</h5>
+        <h5 class="fw-bold mb-3"><i class="bi bi-diagram-3-fill text-primary me-2"></i>Data Preprocessing & Pipeline Audit</h5>
         <div class="row g-3 text-center">
             <div class="col-md-3 col-6"><div class="audit-cell">
                 <div class="label-xs">Raw Rows</div><div class="fs-4 fw-bold">{{ run.raw_rows }}</div>
@@ -79,26 +80,110 @@
                 <div class="small text-muted">SimpleImputer in Pipeline</div>
             </div></div>
             <div class="col-md-3 col-6"><div class="audit-cell">
-                <div class="label-xs">Scaler (auto-selected)</div>
+                <div class="label-xs">Scaler (auto-benchmarked)</div>
                 <div class="fs-5 fw-bold text-primary font-monospace">{{ run.scaler_used|capitalize }}Scaler</div>
                 <div class="small text-muted">ColumnTransformer</div>
             </div></div>
         </div>
     </div>
 
-    <!-- ── Comprehensive metrics table ── -->
+    <!-- ── Phase II: Evaluation the Influence of Noise and Outliers ── -->
+    {% if run.noise_outlier_data and run.noise_outlier_data.comparison %}
     <div class="card border-0 shadow-sm rounded-4 p-4 mb-4 bg-white">
-        <h5 class="fw-bold mb-3"><i class="bi bi-table text-primary me-2"></i>Comprehensive Model Benchmark (KNN vs SVM vs Decision Tree)</h5>
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <div>
+                <span class="badge bg-danger-subtle text-danger border border-danger-subtle mb-1">Phase II Core Objective</span>
+                <h5 class="fw-bold mb-0"><i class="bi bi-radioactive text-danger me-2"></i>Evaluation of the Influence of Noise and Outliers</h5>
+            </div>
+            <div class="text-end small text-muted">
+                <span class="badge bg-light text-dark border me-1">IQR Filtered: {{ run.noise_outlier_data.stats.outliers_removed }} rows</span>
+                <span class="badge bg-light text-dark border">Injected Outliers: {{ run.noise_outlier_data.stats.outliers_injected }} rows</span>
+            </div>
+        </div>
+
+        <p class="text-secondary small mb-3">
+            Testing model robustness against data corruption: evaluates accuracy on the clean test set after training on
+            <strong>Baseline</strong> data, data <strong>Without Outliers</strong> (IQR filtering), data <strong>With Gaussian Feature Noise</strong>, and data with <strong>Injected Outliers</strong>.
+        </p>
+
+        <div class="table-responsive">
+            <table class="table table-bordered table-hover align-middle mb-0 text-center">
+                <thead class="table-light small text-uppercase">
+                    <tr>
+                        <th class="text-start">Model</th>
+                        <th>Baseline</th>
+                        <th>Without Outliers (IQR)</th>
+                        <th>With Feature Noise</th>
+                        <th>Noise Impact (&Delta;)</th>
+                        <th class="text-purple">Noise&rarr;Smoothed <small class="fw-normal">(σ=1.2)</small></th>
+                        <th>Smoothing Recovery</th>
+                        <th>With Injected Outliers</th>
+                        <th>Outlier Impact (&Delta;)</th>
+                    </tr>
+                </thead>
+                <tbody class="small font-monospace">
+                    {% for row in run.noise_outlier_data.comparison %}
+                    <tr>
+                        <td class="text-start font-sans">
+                            <span class="dot dot-{{ row.model_key }} me-1"></span>
+                            <strong>{{ row.model_name }}</strong>
+                        </td>
+                        <td class="fw-bold">{{ (row.baseline_acc*100)|round(1) }}%</td>
+                        <td class="text-success">{{ (row.without_outliers_acc*100)|round(1) }}%</td>
+                        <td class="text-danger">{{ (row.noisy_acc*100)|round(1) }}%</td>
+                        <td>
+                            {% if row.noise_delta < 0 %}
+                            <span class="badge bg-danger-subtle text-danger">{{ (row.noise_delta*100)|round(1) }}% drop</span>
+                            {% else %}
+                            <span class="badge bg-success-subtle text-success">+{{ (row.noise_delta*100)|round(1) }}%</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-purple fw-bold">{{ (row.smoothed_acc*100)|round(1) }}%</td>
+                        <td>
+                            {% set recovery = row.smoothed_acc - row.noisy_acc %}
+                            {% if recovery > 0 %}
+                            <span class="badge bg-purple-subtle" style="background:#f3e8ff;color:#7c3aed">+{{ (recovery*100)|round(1) }}% ✅</span>
+                            {% elif recovery < 0 %}
+                            <span class="badge bg-warning-subtle text-warning-emphasis">{{ (recovery*100)|round(1) }}%</span>
+                            {% else %}
+                            <span class="badge bg-secondary-subtle text-secondary">0%</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-warning-emphasis">{{ (row.outliers_acc*100)|round(1) }}%</td>
+                        <td>
+                            {% if row.outlier_delta < 0 %}
+                            <span class="badge bg-danger-subtle text-danger">{{ (row.outlier_delta*100)|round(1) }}% drop</span>
+                            {% else %}
+                            <span class="badge bg-success-subtle text-success">+{{ (row.outlier_delta*100)|round(1) }}%</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- ── Comprehensive Model Benchmark (KNN vs Ensemble vs SVM) ── -->
+    <div class="card border-0 shadow-sm rounded-4 p-4 mb-4 bg-white">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <div>
+                <span class="badge bg-primary-subtle text-primary border border-primary-subtle mb-1">Phase II Model Benchmark</span>
+                <h5 class="fw-bold mb-0"><i class="bi bi-table text-primary me-2"></i>KNN vs Ensemble (Random Forest) vs SVM</h5>
+            </div>
+            <span class="badge bg-light text-muted border">Manual Hyperparameter Evaluation</span>
+        </div>
         <div class="table-responsive">
             <table class="table table-hover align-middle mb-0">
                 <thead class="table-dark small text-uppercase">
                     <tr>
                         <th>Model</th>
-                        <th>Best Params</th>
+                        <th>Selected Params</th>
                         <th>Test Acc.</th>
                         <th>Train Acc.</th>
                         <th>5-Fold CV</th>
-                        <th>Overfitting</th>
+                        <th>Overfitting Status</th>
                         <th>Precision</th>
                         <th>Recall</th>
                         <th>F1</th>
@@ -120,7 +205,7 @@
                         </td>
                         <td><span class="fs-6 fw-bold {% if loop.first %}text-success{% endif %}">{{ (m.test_accuracy*100)|round(2) }}%</span></td>
                         <td>{{ (m.train_accuracy*100)|round(1) }}%</td>
-                        <td><span class="font-monospace">{{ (m.cv_mean*100)|round(1) }}%</span> <span class="text-muted small">±{{ (m.cv_std*100)|round(1) }}%</span></td>
+                        <td><span class="font-monospace">{{ (m.cv_mean*100)|round(1) }}%</span> <span class="text-muted small">&plusmn;{{ (m.cv_std*100)|round(1) }}%</span></td>
                         <td>
                             <span class="badge bg-{{ m.overfitting_badge }}-subtle text-{{ m.overfitting_badge }} border border-{{ m.overfitting_badge }}-subtle small"
                                   title="{{ m.overfitting_desc }}">{{ m.overfitting_status }}</span>
@@ -136,12 +221,14 @@
         </div>
     </div>
 
-    <!-- ── Plots (tabs) ── -->
+    <!-- ── Phase II Plots (Tabs) ── -->
     <div class="card border-0 shadow-sm rounded-4 p-4 mb-4 bg-white">
         <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
-            <h5 class="fw-bold mb-0"><i class="bi bi-bar-chart-fill text-primary me-2"></i>Visualizations</h5>
+            <h5 class="fw-bold mb-0"><i class="bi bi-bar-chart-fill text-primary me-2"></i>Visualizations & Phase II Analysis</h5>
             <ul class="nav nav-pills" id="plotTabs" role="tablist">
-                <li class="nav-item"><button class="nav-link active small rounded-pill px-3" data-bs-toggle="pill" data-bs-target="#tab-cm"><i class="bi bi-grid-3x3 me-1"></i>Confusion Matrices</button></li>
+                <li class="nav-item"><button class="nav-link active small rounded-pill px-3" data-bs-toggle="pill" data-bs-target="#tab-noise"><i class="bi bi-radioactive me-1"></i>Noise & Outliers</button></li>
+                <li class="nav-item"><button class="nav-link small rounded-pill px-3" data-bs-toggle="pill" data-bs-target="#tab-params"><i class="bi bi-sliders me-1"></i>Parameter Influence</button></li>
+                <li class="nav-item"><button class="nav-link small rounded-pill px-3" data-bs-toggle="pill" data-bs-target="#tab-cm"><i class="bi bi-grid-3x3 me-1"></i>Confusion Matrices</button></li>
                 <li class="nav-item"><button class="nav-link small rounded-pill px-3" data-bs-toggle="pill" data-bs-target="#tab-roc"><i class="bi bi-graph-up me-1"></i>ROC / AUC</button></li>
                 <li class="nav-item"><button class="nav-link small rounded-pill px-3" data-bs-toggle="pill" data-bs-target="#tab-overfit"><i class="bi bi-shield-check me-1"></i>Overfit / CV</button></li>
                 <li class="nav-item"><button class="nav-link small rounded-pill px-3" data-bs-toggle="pill" data-bs-target="#tab-bench"><i class="bi bi-bar-chart-line me-1"></i>Benchmark</button></li>
@@ -150,8 +237,51 @@
 
         <div class="tab-content pt-2">
 
-            <!-- Confusion Matrices — 3 clean cards, side by side, NO scrolling -->
-            <div class="tab-pane fade show active" id="tab-cm">
+            <!-- Tab 1: Noise & Outliers Impact -->
+            <div class="tab-pane fade show active" id="tab-noise">
+                <div class="row g-4 align-items-center">
+                    <div class="col-lg-8 text-center">
+                        <div class="border rounded-4 p-2 bg-white">
+                            {% if 'noise_outlier' in run.plots %}
+                            <img src="{{ run.plots.noise_outlier }}" alt="Noise and Outliers Impact" class="img-fluid rounded-3" style="max-height:460px">
+                            {% else %}
+                            <div class="text-muted py-5">Plot not available.</div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="col-lg-4">
+                        <div class="bg-light rounded-4 p-4 h-100">
+                            <h6 class="fw-bold mb-3"><i class="bi bi-info-circle-fill text-danger me-2"></i>Noise & Outlier Takeaways</h6>
+                            <ul class="list-unstyled small text-secondary mb-0">
+                                <li class="mb-2"><i class="bi bi-check-circle-fill text-success me-2"></i><strong>Without Outliers (IQR):</strong> Trimming extreme statistical anomalies stabilizes decision boundaries and improves generalization.</li>
+                                <li class="mb-2"><i class="bi bi-exclamation-triangle-fill text-warning-emphasis me-2"></i><strong>Feature Noise Vulnerability:</strong> Distance-based algorithms (like KNN) suffer when continuous features undergo Gaussian perturbation.</li>
+                                <li class="mb-2"><i class="bi bi-funnel-fill me-2" style="color:#a855f7"></i><strong>Gaussian Smoothing (σ=1.2):</strong> Applies <code>gaussian_filter1d</code> column-by-column to suppress noise before training — often recovers lost accuracy.</li>
+                                <li><i class="bi bi-shield-fill-check text-primary me-2"></i><strong>Ensemble Robustness:</strong> Random Forest averages multiple randomized trees, significantly mitigating noise and isolated outlier spikes.</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab 2: Parameter Sensitivity (k=?, estimators=?, kernel=?) -->
+            <div class="tab-pane fade" id="tab-params">
+                <div class="text-center">
+                    <div class="border rounded-4 p-2 bg-white">
+                        {% if 'param_sensitivity' in run.plots %}
+                        <img src="{{ run.plots.param_sensitivity }}" alt="Parameter Sensitivity" class="img-fluid rounded-3" style="max-height:460px">
+                        {% else %}
+                        <div class="text-muted py-5">Sensitivity plot not available.</div>
+                        {% endif %}
+                    </div>
+                    <div class="mt-3 text-muted small">
+                        <strong>Phase II Model Parameter Evaluation:</strong>
+                        KNN sensitivity across $k \in [1, 21]$, Ensemble sensitivity across $n\_estimators \in [10, 200]$, and SVM sensitivity across kernels (<code>rbf</code>, <code>linear</code>, <code>poly</code>).
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab 3: Confusion Matrices -->
+            <div class="tab-pane fade" id="tab-cm">
                 <div class="row g-4 justify-content-center">
                     {% for m in run.models %}
                     {% set cm_key = 'cm_' ~ m.model_key %}
@@ -182,7 +312,7 @@
                 </div>
             </div>
 
-            <!-- ROC Curve -->
+            <!-- Tab 4: ROC Curve -->
             <div class="tab-pane fade" id="tab-roc">
                 <div class="row g-4 align-items-center">
                     <div class="col-lg-8 text-center">
@@ -195,7 +325,7 @@
                     <div class="col-lg-4">
                         <div class="bg-light rounded-4 p-4 h-100">
                             <h6 class="fw-bold mb-3"><i class="bi bi-info-circle-fill text-primary me-2"></i>ROC & AUC</h6>
-                            <p class="small text-secondary mb-3">The ROC curve plots True Positive Rate vs False Positive Rate across thresholds. AUC = 1 is perfect; AUC = 0.5 is random.</p>
+                            <p class="small text-secondary mb-3">The ROC curve plots True Positive Rate vs False Positive Rate across classification thresholds.</p>
                             <div class="list-group list-group-flush border rounded-3 small">
                                 {% for m in run.models %}
                                 <div class="list-group-item d-flex justify-content-between bg-white">
@@ -209,7 +339,7 @@
                 </div>
             </div>
 
-            <!-- Overfitting / CV -->
+            <!-- Tab 5: Overfitting / CV -->
             <div class="tab-pane fade" id="tab-overfit">
                 <div class="row g-4 align-items-center">
                     <div class="col-lg-8 text-center">
@@ -236,7 +366,7 @@
                 </div>
             </div>
 
-            <!-- Benchmark -->
+            <!-- Tab 6: Benchmark -->
             <div class="tab-pane fade" id="tab-bench">
                 <div class="text-center">
                     {% if 'benchmark' in run.plots %}
